@@ -199,9 +199,6 @@ def main():
         fig2.update_layout(xaxis_title=feature_label, yaxis_title="SalePrice")
         st.plotly_chart(fig2, width="stretch")
 
-    with st.expander("Show raw data"):
-        st.dataframe(df)
-
 
 if __name__ == "__main__":
     main()
