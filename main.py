@@ -11,10 +11,11 @@ from sklearn.linear_model import LinearRegression, Ridge, Lasso
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 
 from sklearn.model_selection import KFold, cross_val_score
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 
 import joblib
 
+# Try to import XGBoost if available
 try:
     from xgboost import XGBRegressor
     HAS_XGB = True
@@ -29,8 +30,10 @@ RANDOM_STATE = 42
 def load_data(train_path: str) -> pd.DataFrame:
     """Load the Kaggle House Prices training data."""
     if not os.path.exists(train_path):
-        raise FileNotFoundError(f"Training file not found at {train_path}. "
-                                f"Make sure train.csv is downloaded from Kaggle.")
+        raise FileNotFoundError(
+            f"Training file not found at {train_path}. "
+            f"Make sure train.csv is downloaded from Kaggle."
+        )
 
     df = pd.read_csv(train_path)
     print(f"Loaded training data: {df.shape[0]} rows, {df.shape[1]} columns.")
@@ -59,20 +62,24 @@ def build_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
     print(f"Numeric features: {len(numeric_features)}")
     print(f"Categorical features: {len(categorical_features)}")
 
-    numeric_transformer = Pipeline(steps=[
-        ("imputer", SimpleImputer(strategy="median")),
-        ("scaler", StandardScaler())
-    ])
+    numeric_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
 
-    categorical_transformer = Pipeline(steps=[
-        ("imputer", SimpleImputer(strategy="most_frequent")),
-        ("onehot", OneHotEncoder(handle_unknown="ignore"))
-    ])
+    categorical_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("onehot", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
 
     preprocessor = ColumnTransformer(
         transformers=[
             ("num", numeric_transformer, numeric_features),
-            ("cat", categorical_transformer, categorical_features)
+            ("cat", categorical_transformer, categorical_features),
         ]
     )
 
@@ -89,14 +96,14 @@ def get_models():
             n_estimators=200,
             max_depth=None,
             random_state=RANDOM_STATE,
-            n_jobs=-1
+            n_jobs=-1,
         ),
         "GradientBoosting": GradientBoostingRegressor(
             n_estimators=300,
             learning_rate=0.05,
             max_depth=3,
-            random_state=RANDOM_STATE
-        )
+            random_state=RANDOM_STATE,
+        ),
     }
 
     if HAS_XGB:
@@ -107,14 +114,19 @@ def get_models():
             subsample=0.8,
             colsample_bytree=0.8,
             objective="reg:squarederror",
-            random_state=RANDOM_STATE
+            random_state=RANDOM_STATE,
         )
 
     return models
 
 
 def evaluate_models(X, y, preprocessor, cv_splits: int = 5):
-    """Run cross-validation for each model and return a summary DataFrame."""
+    """
+    Run cross-validation for each model and return a summary DataFrame.
+
+    Columns:
+      model, rmse_mean, rmse_std, mae_mean, mae_std, r2_mean, r2_std
+    """
     models = get_models()
     results = []
 
@@ -122,17 +134,28 @@ def evaluate_models(X, y, preprocessor, cv_splits: int = 5):
 
     for name, model in models.items():
         print(f"\n=== Evaluating {name} ===")
-        pipe = Pipeline(steps=[
-            ("preprocessor", preprocessor),
-            ("model", model)
-        ])
+        pipe = Pipeline(
+            steps=[
+                ("preprocessor", preprocessor),
+                ("model", model),
+            ]
+        )
+
         rmse_scores = cross_val_score(
             pipe,
             X,
             y,
             cv=kf,
             scoring="neg_root_mean_squared_error",
-            n_jobs=-1
+            n_jobs=-1,
+        )
+        mae_scores = cross_val_score(
+            pipe,
+            X,
+            y,
+            cv=kf,
+            scoring="neg_mean_absolute_error",
+            n_jobs=-1,
         )
         r2_scores = cross_val_score(
             pipe,
@@ -140,24 +163,33 @@ def evaluate_models(X, y, preprocessor, cv_splits: int = 5):
             y,
             cv=kf,
             scoring="r2",
-            n_jobs=-1
+            n_jobs=-1,
         )
 
         rmse_mean = -rmse_scores.mean()
         rmse_std = rmse_scores.std()
+        mae_mean = -mae_scores.mean()
+        mae_std = mae_scores.std()
         r2_mean = r2_scores.mean()
         r2_std = r2_scores.std()
 
-        print(f"{name} - RMSE: {rmse_mean:.4f} (+/- {rmse_std:.4f}), "
-              f"R^2: {r2_mean:.4f} (+/- {r2_std:.4f})")
+        print(
+            f"{name} - RMSE: {rmse_mean:.4f} (+/- {rmse_std:.4f}), "
+            f"MAE: {mae_mean:.4f} (+/- {mae_std:.4f}), "
+            f"R^2: {r2_mean:.4f} (+/- {r2_std:.4f})"
+        )
 
-        results.append({
-            "model": name,
-            "rmse_mean": rmse_mean,
-            "rmse_std": rmse_std,
-            "r2_mean": r2_mean,
-            "r2_std": r2_std
-        })
+        results.append(
+            {
+                "model": name,
+                "rmse_mean": rmse_mean,
+                "rmse_std": rmse_std,
+                "mae_mean": mae_mean,
+                "mae_std": mae_std,
+                "r2_mean": r2_mean,
+                "r2_std": r2_std,
+            }
+        )
 
     results_df = pd.DataFrame(results).sort_values("rmse_mean")
     return results_df
@@ -170,20 +202,24 @@ def train_best_model(X, y, preprocessor, best_model_name: str):
         raise ValueError(f"Unknown model name: {best_model_name}")
 
     best_model = models[best_model_name]
-    pipeline = Pipeline(steps=[
-        ("preprocessor", preprocessor),
-        ("model", best_model)
-    ])
+    pipeline = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("model", best_model),
+        ]
+    )
 
     print(f"\nTraining best model on full data: {best_model_name}")
     pipeline.fit(X, y)
 
     preds = pipeline.predict(X)
-    mse = mean_squared_error(y, preds)  
-    rmse = mse ** 0.5                   
+    mse = mean_squared_error(y, preds)
+    rmse = mse ** 0.5
     r2 = r2_score(y, preds)
+    mae = mean_absolute_error(y, preds)
     print(f"Train RMSE (on all data): {rmse:.4f}")
-    print(f"Train R^2 (on all data): {r2:.4f}")
+    print(f"Train MAE  (on all data): {mae:.4f}")
+    print(f"Train R^2  (on all data): {r2:.4f}")
 
     return pipeline
 
@@ -215,24 +251,33 @@ def show_feature_importance(pipeline, X: pd.DataFrame, top_k: int = 15):
         kind = "|coefficient|"
 
     if importances is None:
-        print(f"Model type {type(model)} does not provide feature importances or coefficients.")
+        print(
+            f"Model type {type(model)} does not provide feature importances or "
+            "coefficients."
+        )
         return None
 
     if len(importances) != len(feature_names):
         print("Mismatch between number of importances and feature names.")
         return None
 
-    df_importance = pd.DataFrame({
-        "feature": feature_names,
-        kind: importances
-    }).sort_values(kind, ascending=False).head(top_k)
+    df_importance = (
+        pd.DataFrame(
+            {
+                "feature": feature_names,
+                kind: importances,
+            }
+        )
+        .sort_values(kind, ascending=False)
+        .head(top_k)
+    )
 
     print(df_importance)
     return df_importance
 
 
 def predict_on_test(best_pipeline, test_path: str, output_path: str = "predictions.csv"):
-    """Make predictions on Kaggle test.csv and save to a CSV for submission (optional)."""
+    """Make predictions on Kaggle test.csv and save to a CSV for submission."""
     if not os.path.exists(test_path):
         print(f"\nTest file not found at {test_path}. Skipping test predictions.")
         return
@@ -244,17 +289,14 @@ def predict_on_test(best_pipeline, test_path: str, output_path: str = "predictio
     X_test = test_df.drop(columns=["Id"])
 
     preds = best_pipeline.predict(X_test)
-    submission = pd.DataFrame({
-        "Id": test_ids,
-        "SalePrice": preds
-    })
+    submission = pd.DataFrame({"Id": test_ids, "SalePrice": preds})
     submission.to_csv(output_path, index=False)
     print(f"Saved test predictions to {output_path}")
 
 
 def main():
     train_path = os.path.join("data", "train.csv")
-    test_path = os.path.join("data", "test.csv")  
+    test_path = os.path.join("data", "test.csv")
     saved_model_path = "best_model.joblib"
 
     df = load_data(train_path)
