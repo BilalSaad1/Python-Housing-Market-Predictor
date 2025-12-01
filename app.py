@@ -6,22 +6,21 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 
-import main as hp_main  # your main.py
+import main as hp_main
 
-# ---------- CONFIG ----------
 TRAIN_PATH = os.path.join("data", "train.csv")
-# ----------------------------
+
 
 
 @st.cache_data
 def load_data():
+    """Load the training dataset once and cache it for the app."""
     if not os.path.exists(TRAIN_PATH):
-        raise FileNotFoundError(f"Could not find training data at {TRAIN_PATH}.")
+        raise FileNotFoundError(f"Can't find the data {TRAIN_PATH}.")
     df = pd.read_csv(TRAIN_PATH)
     return df
 
 
-# Nice human-readable labels for the main numeric features
 FEATURE_LABELS = {
     "MSSubClass": "Dwelling type (MSSubClass)",
     "LotFrontage": "Lot frontage (ft)",
@@ -63,21 +62,16 @@ FEATURE_LABELS = {
 
 
 def pretty_feature_name(col: str) -> str:
-    """Map raw column name to a nicer label."""
+    """Convert a raw column name into a readable label for plots."""
     if col in FEATURE_LABELS:
         return FEATURE_LABELS[col]
-
-    # Fallback: split CamelCase / underscores
     s = col.replace("_", " ")
     s = re.sub(r"([a-z])([A-Z0-9])", r"\1 \2", s)
     return s
 
 
 def pretty_importance_name(raw: str) -> str:
-    """
-    Clean names like 'num__OverallQual' or 'cat__BsmtQual_Ex'
-    into something readable.
-    """
+    """Convert transformed feature names into readable feature descriptions."""
     if "__" in raw:
         _, rest = raw.split("__", 1)
     else:
@@ -92,7 +86,10 @@ def pretty_importance_name(raw: str) -> str:
 
 @st.cache_resource
 def compute_model_results():
-    """Run the same training pipeline as main.py and return results + importance."""
+    """
+    Train and evaluate models (using main.py helpers) and cache the results.
+
+    """
     df = hp_main.load_data(TRAIN_PATH)
     X, y = hp_main.split_features_target(df, target_col="SalePrice")
     preprocessor = hp_main.build_preprocessor(X)
@@ -105,14 +102,15 @@ def compute_model_results():
     return results_df, best_model_name, importance_df
 
 
+
 def main():
     st.set_page_config(
         page_title="Housing Market Predictor",
-        page_icon="🏠",
+        page_icon="",
         layout="wide",
     )
 
-    st.title("🏠 Housing Market Predictor – Ames Dataset")
+    st.title("Housing Market Predictor")
 
     st.markdown(
         """
@@ -120,17 +118,14 @@ def main():
 
         - Explore the **SalePrice** distribution and log transform  
         - Inspect correlations between numeric features  
-        - See **model comparison** results (RMSE / MAE / R²)  
-        - View **top feature importances** from the best model
+        - Compare models by **RMSE** and **R² (accuracy)**  
+        - See **top feature importances** for the best model
         """
     )
 
     df = load_data()
     results_df, best_model_name, importance_df = compute_model_results()
 
-    # ------------------------------------------------------------------
-    # DATASET EXPLORATION
-    # ------------------------------------------------------------------
     st.header("Dataset exploration")
 
     st.subheader("SalePrice – before / after log scaling")
@@ -164,7 +159,6 @@ def main():
 
     corr_all = df[numeric_cols].corr()
 
-    # IMPORTANT: use Series so sort_values works (fixes your error)
     target_corr = (
         corr_all.loc[:, "SalePrice"]
         .drop(labels=["SalePrice"])
@@ -174,7 +168,6 @@ def main():
 
     top_corr_features = target_corr.head(10).index.tolist()
     heat_features = top_corr_features + ["SalePrice"]
-
     corr_subset = corr_all.loc[heat_features, heat_features]
 
     fig_heat = px.imshow(
@@ -191,11 +184,9 @@ def main():
 
     st.markdown("### SalePrice vs. selected numeric feature")
 
-    # For the scatter, allow choosing any numeric feature (except Id & SalePrice)
-    num_for_scatter = [c for c in numeric_cols if c != "SalePrice"]
-
+    scatter_candidates = [c for c in numeric_cols if c != "SalePrice"]
     label_to_col = {}
-    for col in num_for_scatter:
+    for col in scatter_candidates:
         label = pretty_feature_name(col)
         if label in label_to_col:
             label = f"{label} ({col})"
@@ -220,15 +211,11 @@ def main():
     )
     st.plotly_chart(fig_scatter, width="stretch")
 
-    # ------------------------------------------------------------------
-    # MODEL PERFORMANCE
-    # ------------------------------------------------------------------
     st.header("Model evaluation")
 
     if results_df is not None:
         st.subheader("Cross-validated RMSE per model")
 
-        # Bar chart with error bars (like your final report)
         fig_rmse = px.bar(
             results_df,
             x="model",
@@ -242,6 +229,21 @@ def main():
         fig_rmse.update_layout(height=400)
         st.plotly_chart(fig_rmse, width="stretch")
 
+        st.subheader("Model accuracy (R²) per model")
+
+        fig_r2 = px.bar(
+            results_df,
+            x="model",
+            y="r2_mean",
+            error_y="r2_std",
+            labels={
+                "model": "Model",
+                "r2_mean": "CV R² (higher is better)",
+            },
+        )
+        fig_r2.update_layout(height=400, yaxis_range=[0, 1])
+        st.plotly_chart(fig_r2, width="stretch")
+
         best_row = results_df[results_df["model"] == best_model_name].iloc[0]
 
         st.markdown(
@@ -251,19 +253,18 @@ def main():
 
         st.subheader("Cross-validated metrics for best model")
 
-        c1, c2, c3 = st.columns(3)
+        c1, c2 = st.columns(2)
         c1.metric("RMSE", f"{best_row['rmse_mean']:,.0f}")
-        c2.metric("MAE", f"{best_row['mae_mean']:,.0f}")
-        c3.metric("R²", f"{best_row['r2_mean']:.3f}")
+        c2.metric("R²", f"{best_row['r2_mean']:.3f}")
 
         st.markdown("### Model performance table")
         st.dataframe(
-            results_df.style.format(
+            results_df[["model", "rmse_mean", "rmse_std", "r2_mean", "r2_std"]]
+            .sort_values("rmse_mean")
+            .style.format(
                 {
                     "rmse_mean": "{:,.0f}",
                     "rmse_std": "{:,.0f}",
-                    "mae_mean": "{:,.0f}",
-                    "mae_std": "{:,.0f}",
                     "r2_mean": "{:.3f}",
                     "r2_std": "{:.3f}",
                 }
@@ -271,9 +272,6 @@ def main():
             use_container_width=True,
         )
 
-    # ------------------------------------------------------------------
-    # FEATURE IMPORTANCES
-    # ------------------------------------------------------------------
     st.header("Top feature importances")
 
     if importance_df is not None:
@@ -296,7 +294,6 @@ def main():
 
         st.markdown("Top features table")
         st.dataframe(cleaned_importance, use_container_width=True)
-
 
 
 if __name__ == "__main__":
